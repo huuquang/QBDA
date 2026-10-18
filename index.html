@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>BDA · Báo cáo kho</title>
+  <link rel="icon" type="image/png" href="./Kho_favicon.png?v=20261018">
+  <style>
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:#f5f7f8; }
+    body { font-family:Arial,sans-serif; color:#1e3038; }
+    #appFrame { position:fixed; inset:0; width:100%; height:100%; border:0; background:#f5f7f8; }
+    #status { position:fixed; z-index:2; right:12px; bottom:12px; max-width:min(420px,calc(100vw - 48px)); padding:10px 14px; border:1px solid #d5e7e5; border-radius:10px; background:#fff; box-shadow:0 2px 12px #102f3815; font-size:13px; line-height:1.5; }
+    #status a { color:#087c79; margin-left:8px; }
+    #setup { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:20px; box-sizing:border-box; }
+    #setup section { max-width:520px; padding:28px; border:1px solid #e4ebee; border-radius:16px; background:#fff; line-height:1.6; }
+    h1 { margin:0 0 12px; font-size:23px; color:#087c79; }
+    code { word-break:break-word; }
+    [hidden] { display:none!important; }
+  </style>
+</head>
+<body>
+  <iframe id="appFrame" title="Kho BDA" allow="clipboard-write *" hidden></iframe>
+  <div id="status" role="status" aria-live="polite" hidden>
+    <span id="statusText">Đang mở Kho BDA…</span>
+    <a id="openGoogle" target="_blank" rel="noopener noreferrer" hidden>Mở link Google ↗</a>
+  </div>
+  <main id="setup" hidden>
+    <section>
+      <h1>Kho BDA</h1>
+      <p id="setupText"></p>
+      <p>Trong file <code>index.html</code> trên GitHub, điền link web Apps Script của bạn vào dòng <code>APPS_SCRIPT_URL</code>, rồi lưu lại.</p>
+    </section>
+  </main>
+  <script>
+  // CHỈ SỬA DÒNG DƯỚI: dán link Apps Script đã Deploy, có /exec ở cuối.
+  const APPS_SCRIPT_URL = 'DAN_LINK_WEB_APP_VAO_DAY';
+
+  (function () {
+    'use strict';
+    const frame = document.getElementById('appFrame');
+    const status = document.getElementById('status');
+    const statusText = document.getElementById('statusText');
+    const openGoogle = document.getElementById('openGoogle');
+    let baseUrl;
+    let currentPage = '';
+    let activeApp = null;
+    let pendingTimer = null;
+    let authKey = '';
+    function savedAuth(){try{return sessionStorage.getItem(authKey)||'';}catch(_){return '';}}
+    function saveAuth(value){try{if(value)sessionStorage.setItem(authKey,value);else sessionStorage.removeItem(authKey);}catch(_){}}
+
+    try {
+      baseUrl = new URL(APPS_SCRIPT_URL.trim());
+      if (baseUrl.protocol !== 'https:' || baseUrl.hostname !== 'script.google.com' ||
+          baseUrl.username || baseUrl.password || baseUrl.port ||
+          !/\/s\/[A-Za-z0-9_-]+\/exec\/?$/.test(baseUrl.pathname)) {
+        throw new Error('Link cần có dạng https://script.google.com/macros/s/MA_TRIEN_KHAI/exec.');
+      }
+      baseUrl.hash = '';
+      authKey='Kho.auth.host.'+baseUrl.origin+baseUrl.pathname;
+      ['page', 'view', 'date', 'sku'].forEach(key => baseUrl.searchParams.delete(key));
+    } catch (_) {
+      document.getElementById('setupText').textContent = 'Chưa có link Kho BDA hợp lệ. Dùng link bản triển khai kết thúc bằng /exec.';
+      document.getElementById('setup').hidden = false;
+      return;
+    }
+
+    function routePage() {
+      return new URL(window.location.href).searchParams.get('page') === 'entry' ? 'entry' : 'report';
+    }
+    function appUrl(page) {
+      const url = new URL(baseUrl.href);
+      url.searchParams.set('page', page);
+      if (page === 'report') {
+        const query = new URL(window.location.href).searchParams;
+        ['view', 'date', 'sku'].forEach(key => {
+          if (query.has(key)) url.searchParams.set(key, query.get(key));
+        });
+      }
+      return url.href;
+    }
+    function trustedAppOrigin(origin) {
+      try {
+        const url = new URL(origin);
+        return url.origin === origin && url.protocol === 'https:' &&
+          (url.hostname === 'script.google.com' || url.hostname === 'script.googleusercontent.com' ||
+           url.hostname.endsWith('.googleusercontent.com'));
+      } catch (_) { return false; }
+    }
+    // Apps Script đặt trang HTML trong iframe riêng. Chỉ nhận từ chính cây iframe này.
+    function belongsToAppFrame(source) {
+      if (!source) return false;
+      const queue = [{ node: frame.contentWindow, depth: 0 }];
+      for (let count = 0; queue.length && count < 64; count++) {
+        const { node, depth } = queue.shift();
+        if (!node) continue;
+        if (node === source) return true;
+        if (depth >= 4) continue;
+        try {
+          const length = Math.min(node.length, 16);
+          for (let i = 0; i < length; i++) queue.push({ node: node.frames[i], depth: depth + 1 });
+        } catch (_) { /* Không truy cập DOM hoặc dữ liệu của iframe khác miền. */ }
+      }
+      return false;
+    }
+    function navigate(page, push) {
+      if (!['report', 'entry'].includes(page)) return;
+      if (push) {
+        if (page === currentPage) return;
+        const url = new URL(window.location.href);
+        ['view', 'date', 'sku'].forEach(key => url.searchParams.delete(key));
+        url.searchParams.set('page', page);
+        window.history.pushState({ khoV8Page: page }, '', url.href);
+      }
+      currentPage = page;
+      activeApp = null;
+      clearTimeout(pendingTimer);
+      document.title = page === 'entry' ? 'BDA · Nhập liệu' : new URL(window.location.href).searchParams.get('view') === 'print' ? 'BDA · In kiểm kê' : 'BDA · Báo cáo kho';
+      const src = appUrl(page);
+      openGoogle.href = src;
+      openGoogle.hidden = true;
+      statusText.textContent = 'Đang mở Kho BDA…';
+      status.hidden = false;
+      frame.hidden = false;
+      frame.src = src;
+      pendingTimer = setTimeout(function () {
+        if (activeApp) return;
+        statusText.textContent = 'Chưa nhận kết nối từ Kho BDA. Kiểm tra bản triển khai hoặc đăng nhập Google.';
+        openGoogle.hidden = false;
+      }, 20000);
+    }
+
+    window.addEventListener('message', function (event) {
+      const data = event.data;
+      if (!data || typeof data !== 'object' || typeof data.id !== 'string' ||
+          !trustedAppOrigin(event.origin) || !belongsToAppFrame(event.source) ||
+          !/^[a-f0-9]{32}$/.test(data.id)) return;
+      if (data.type === 'KhoV8.host.ready.v1') {
+        if (data.page !== currentPage) return;
+        activeApp = { source: event.source, origin: event.origin, id: data.id };
+        event.source.postMessage({ type: 'KhoV8.host.connected.v1', id: data.id, page: currentPage }, event.origin);
+        clearTimeout(pendingTimer);
+        status.hidden = true;
+      } else if (data.type === 'Kho.auth.request.v1' || data.type === 'Kho.auth.save.v1') {
+        if (!activeApp || activeApp.source !== event.source || activeApp.origin !== event.origin ||
+            activeApp.id !== data.id || data.page !== currentPage) return;
+        if (data.type === 'Kho.auth.request.v1') {
+          const token=savedAuth();
+          if (/^[a-f0-9]{64}$/.test(token)) event.source.postMessage({type:'Kho.auth.restore.v1',id:data.id,page:currentPage,token},event.origin);
+        } else if (data.token === '' || typeof data.token === 'string' && /^[a-f0-9]{64}$/.test(data.token)) saveAuth(data.token);
+      } else if (data.type === 'Kho.host.title.v1') {
+        if (!activeApp || activeApp.source !== event.source || activeApp.origin !== event.origin ||
+            activeApp.id !== data.id || data.page !== currentPage) return;
+        const allowed = currentPage === 'entry' ? ['BDA · Nhập liệu'] : ['BDA · Báo cáo kho', 'BDA · In kiểm kê'];
+        if (allowed.includes(data.title)) document.title = data.title;
+      } else if (data.type === 'KhoV8.host.navigate.v1') {
+        if (!activeApp || activeApp.source !== event.source || activeApp.origin !== event.origin ||
+            activeApp.id !== data.id) return;
+        navigate(data.page, true);
+      }
+    });
+    window.addEventListener('popstate', function () { navigate(routePage(), false); });
+    window.addEventListener('pagehide', function () { clearTimeout(pendingTimer); });
+    navigate(routePage(), false);
+  }());
+  </script>
+</body>
+</html>
