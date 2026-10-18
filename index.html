@@ -34,7 +34,7 @@
   </main>
   <script>
   // CHỈ SỬA DÒNG DƯỚI: dán link Apps Script đã Deploy, có /exec ở cuối.
-  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxy4oboOxQ0L4cXCL_tGwduPH5RzTcZjvkd84xQSCwAs0ymg-YftuWqWJYVIZ9_ldR26A/exec';
+  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzUV0wHnjkwtCfMIzGAOVrllYl52YvyqAtBDQctlDEPGmhP3KmkgOUsBvjhCCH9iRIi2w/exec';
 
   (function () {
     'use strict';
@@ -47,8 +47,15 @@
     let activeApp = null;
     let pendingTimer = null;
     let authKey = '';
-    function savedAuth(){try{return sessionStorage.getItem(authKey)||'';}catch(_){return '';}}
-    function saveAuth(value){try{if(value)sessionStorage.setItem(authKey,value);else sessionStorage.removeItem(authKey);}catch(_){}}
+    function savedAuth(){
+      try{const value=sessionStorage.getItem(authKey)||'';if(/^[a-f0-9]{64}$/.test(value))return value;}catch(_){}
+      try{const value=localStorage.getItem(authKey);if(!value)return '';const record=JSON.parse(value);if(record&&/^[a-f0-9]{64}$/.test(record.token)&&Number.isFinite(record.expiresAt)&&record.expiresAt>Date.now())return record.token;localStorage.removeItem(authKey);}catch(_){try{localStorage.removeItem(authKey);}catch(_){}}
+      return '';
+    }
+    function saveAuth(value,remember=false,expiresAt=0){
+      try{if(value)sessionStorage.setItem(authKey,value);else sessionStorage.removeItem(authKey);}catch(_){}
+      try{if(value&&remember===true&&Number.isFinite(expiresAt)&&expiresAt>Date.now())localStorage.setItem(authKey,JSON.stringify({token:value,expiresAt}));else localStorage.removeItem(authKey);}catch(_){}
+    }
 
     try {
       baseUrl = new URL(APPS_SCRIPT_URL.trim());
@@ -147,8 +154,8 @@
             activeApp.id !== data.id || data.page !== currentPage) return;
         if (data.type === 'Kho.auth.request.v1') {
           const token=savedAuth();
-          if (/^[a-f0-9]{64}$/.test(token)) event.source.postMessage({type:'Kho.auth.restore.v1',id:data.id,page:currentPage,token},event.origin);
-        } else if (data.token === '' || typeof data.token === 'string' && /^[a-f0-9]{64}$/.test(data.token)) saveAuth(data.token);
+          event.source.postMessage({type:'Kho.auth.restore.v1',id:data.id,page:currentPage,token:/^[a-f0-9]{64}$/.test(token)?token:''},event.origin);
+        } else if (data.token === '' || typeof data.token === 'string' && /^[a-f0-9]{64}$/.test(data.token)) saveAuth(data.token,data.remember,data.expiresAt);
       } else if (data.type === 'Kho.host.title.v1') {
         if (!activeApp || activeApp.source !== event.source || activeApp.origin !== event.origin ||
             activeApp.id !== data.id || data.page !== currentPage) return;
